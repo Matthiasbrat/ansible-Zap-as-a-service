@@ -1,4 +1,4 @@
-FROM owasp/zap2docker-stable
+FROM zaproxy/zap-stable
 
 USER root
 
@@ -28,7 +28,14 @@ ENV DISPLAY=:1 \
     TERM=xterm \
     JAVA_OPTS="-Xmx3g"
 
-# Copy config files
+# Create dummy files needed by Dockerfile for build to succeed
+# These will be overwritten by the actual files from volume mounts
+RUN mkdir -p /zap/scripts /zap/config /home/zap/.ZAP \
+    && touch /zap/scripts/zap-api-daemon.sh \
+    && touch /home/zap/.ZAP/config.properties \
+    && chmod +x /zap/scripts/zap-api-daemon.sh
+
+# Copy config files (these are dummy files that will be overwritten by volume mounts)
 COPY ./scripts/zap-api-daemon.sh /zap/zap-api-daemon.sh
 COPY ./config/config.properties /home/zap/.ZAP/config.properties
 
@@ -42,25 +49,30 @@ nodaemon=true\n\
 [program:xvfb]\n\
 command=Xvfb :1 -screen 0 1920x1080x24\n\
 autorestart=true\n\
+priority=10\n\
 \n\
 [program:x11vnc]\n\
-command=x11vnc -display :1 -nopw -forever -shared\n\
+command=x11vnc -display :1 -nopw -forever -shared -listen 0.0.0.0 -xkb -localhost no -noxrecord -noxfixes -noxdamage -wait 5\n\
 autorestart=true\n\
+priority=20\n\
 \n\
 [program:novnc]\n\
 command=websockify --web /usr/share/novnc 6901 localhost:5901\n\
 autorestart=true\n\
+priority=30\n\
 \n\
 [program:fluxbox]\n\
 command=fluxbox\n\
 environment=DISPLAY=:1\n\
 autorestart=true\n\
+priority=15\n\
 \n\
 [program:zap]\n\
 command=/zap/zap-api-daemon.sh\n\
 autorestart=true\n\
 user=zap\n\
 environment=DISPLAY=:1\n\
+priority=40\n\
 ' > /etc/supervisor/conf.d/supervisord.conf
 
 # Set working directory

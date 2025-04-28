@@ -8,6 +8,7 @@ WorkingDirectory=/opt/zaas
 Environment=FLASK_ENV=production
 Environment=ZAP_API_KEY={{ zaproxy_api_key | default('zaproxy') }}
 Environment=FLASK_SECRET_KEY={{ zaproxy_secret_key | default('zaproxy-secret-key') }}
+Environment=ZAAS_PORT={{ zap_zaas_port | default('5000') }}
 Restart=always
 User={{ zaproxy_user | default('zaproxy') }}
 Group={{ zaproxy_group | default('zaproxy') }}

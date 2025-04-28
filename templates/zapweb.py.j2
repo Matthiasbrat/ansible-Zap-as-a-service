@@ -11,7 +11,7 @@ import uuid
 import logging
 import requests
 from datetime import datetime
-from flask import Flask, render_template, request, jsonify, redirect, url_for, flash, send_from_directory
+from flask import Flask, render_template, request, jsonify, redirect, url_for, flash, send_from_directory, get_flashed_messages
 
 # Setup logging
 logging.basicConfig(
@@ -23,7 +23,7 @@ logger = logging.getLogger('zaas-web')
 # Configuration
 ZAP_API_URL = "http://localhost:8080/JSON"
 ZAP_API_KEY = os.environ.get('ZAP_API_KEY', '{{ zaproxy_api_key | default("zaproxy") }}')
-ZAP_GUI_URL = "http://localhost:6901"
+ZAP_GUI_URL = "http://{{ ansible_hostname }}:{{ zap_novnc_port }}"
 REPORTS_DIR = "static/reports"
 MAX_RETRIES = 5
 RETRY_DELAY = 2  # seconds
@@ -238,7 +238,12 @@ def generate_report(target_url, scan_id):
 def index():
     """Main dashboard page"""
     zap_status = check_zap_status()
-    return render_template('index.html', zap_status=zap_status, scans=scans)
+    # Get any flash messages to pass as a variable to the template
+    flash_messages = []
+    flashed = get_flashed_messages(with_categories=True)
+    if flashed:
+        flash_messages = flashed
+    return render_template('index.html', zap_status=zap_status, scans=scans, flash_messages=flash_messages)
 
 
 @app.route('/start_scan', methods=['POST'])
@@ -362,5 +367,8 @@ if __name__ == '__main__':
     # Make sure the reports directory exists
     os.makedirs(REPORTS_DIR, exist_ok=True)
     
+    # Get port from environment variable with fallback to default
+    port = int(os.environ.get('ZAAS_PORT', {{ zap_zaas_port | default('5000') }}))
+    
     # Start the Flask app
-    app.run(host='0.0.0.0', port=5000, debug=False)
+    app.run(host='0.0.0.0', port=port, debug=False)

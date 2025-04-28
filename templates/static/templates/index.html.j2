@@ -38,7 +38,7 @@
                         <a class="nav-link active" href="#">Dashboard</a>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link" href="http://localhost:6901/" target="_blank">ZAP GUI</a>
+                        <a class="nav-link" href="http://{{ ansible_hostname }}:{{ zap_novnc_port }}/" target="_blank">ZAP GUI</a>
                     </li>
                 </ul>
             </div>
@@ -48,13 +48,11 @@
     <div class="container mt-4">
         <div class="row">
             <div class="col-md-12">
-                {% with messages = get_flashed_messages(with_categories=true) %}
-                    {% if messages %}
-                        {% for category, message in messages %}
-                            <div class="alert alert-{{ category }}">{{ message }}</div>
-                        {% endfor %}
-                    {% endif %}
-                {% endwith %}
+                {% if flash_messages is defined and flash_messages %}
+                    {% for category, message in flash_messages %}
+                        <div class="alert alert-{{ category }}">{{ message }}</div>
+                    {% endfor %}
+                {% endif %}
             </div>
         </div>
 
@@ -63,12 +61,12 @@
                 <div class="card">
                     <div class="card-header">
                         ZAP Status 
-                        {% if zap_status.status == 'running' %}
+                        {% if zap_status is defined and zap_status.status is defined and zap_status.status == 'running' %}
                             <span class="status-badge status-running"></span>
-                            <span class="text-success">Running (Version {{ zap_status.version }})</span>
+                            <span class="text-success">Running (Version {{ zap_status.version|default('unknown') }})</span>
                         {% else %}
                             <span class="status-badge status-error"></span>
-                            <span class="text-danger">Not Running ({{ zap_status.message }})</span>
+                            <span class="text-danger">Not Running {% if zap_status is defined and zap_status.message is defined %}({{ zap_status.message }}){% endif %}</span>
                         {% endif %}
                     </div>
                     <div class="card-body">
@@ -85,7 +83,7 @@
                                     <option value="active">Active Scan Only</option>
                                 </select>
                             </div>
-                            <button type="submit" class="btn btn-primary" {% if zap_status.status != 'running' %}disabled{% endif %}>
+                            <button type="submit" class="btn btn-primary" {% if zap_status is defined and zap_status.status is defined and zap_status.status != 'running' %}disabled{% endif %}>
                                 Start Scan
                             </button>
                         </form>
@@ -98,50 +96,58 @@
             <div class="col-md-12">
                 <h2>Scan History</h2>
                 <div id="scan-history">
-                    {% for scan_id, scan in scans.items() %}
-                        <div class="card scan-card" id="scan-{{ scan_id }}">
-                            <div class="card-header">
-                                <strong>{{ scan.target }}</strong> 
-                                <span class="badge {% if scan.status == 'completed' %}bg-success{% elif scan.status == 'error' %}bg-danger{% else %}bg-primary{% endif %} float-end">
-                                    {{ scan.status|replace('_', ' ')|title }}
-                                </span>
-                            </div>
-                            <div class="card-body">
-                                <p>Type: <span class="badge bg-secondary">{{ scan.type|title }}</span></p>
-                                <p>Started: {{ scan.start_time }}</p>
-                                
-                                {% if scan.status in ['spider_running', 'scan_running'] %}
-                                    <div class="progress mb-3">
-                                        <div class="progress-bar {% if scan.status == 'spider_running' %}progress-bar-spider{% else %}progress-bar-scan{% endif %}" 
-                                             role="progressbar" style="width: {{ scan.progress }}%;" 
-                                             aria-valuenow="{{ scan.progress }}" aria-valuemin="0" aria-valuemax="100">
-                                            {{ scan.progress }}%
+                    {% if scans is defined %}
+                        {% for scan_id, scan in scans.items() %}
+                            <div class="card scan-card" id="scan-{{ scan_id }}">
+                                <div class="card-header">
+                                    <strong>{{ scan.target|default('Unknown Target') }}</strong> 
+                                    <span class="badge {% if scan.status == 'completed' %}bg-success{% elif scan.status == 'error' %}bg-danger{% else %}bg-primary{% endif %} float-end">
+                                        {{ scan.status|default('unknown')|replace('_', ' ')|title }}
+                                    </span>
+                                </div>
+                                <div class="card-body">
+                                    <p>Type: <span class="badge bg-secondary">{{ scan.type|default('Unknown')|title }}</span></p>
+                                    <p>Started: {{ scan.start_time|default('Unknown') }}</p>
+                                    
+                                    {% if scan.status is defined and scan.status in ['spider_running', 'scan_running'] and scan.progress is defined %}
+                                        <div class="progress mb-3">
+                                            <div class="progress-bar {% if scan.status == 'spider_running' %}progress-bar-spider{% else %}progress-bar-scan{% endif %}" 
+                                                 role="progressbar" style="width: {{ scan.progress }}%;" 
+                                                 aria-valuenow="{{ scan.progress }}" aria-valuemin="0" aria-valuemax="100">
+                                                {{ scan.progress }}%
+                                            </div>
                                         </div>
-                                    </div>
-                                {% endif %}
-                                
-                                {% if scan.status == 'completed' %}
-                                    <p>Completed: {{ scan.end_time }}</p>
-                                    <h5>Results:</h5>
-                                    <ul>
-                                        <li><span class="alert-count-high">{{ scan.alerts.High }}</span> High Risk</li>
-                                        <li><span class="alert-count-medium">{{ scan.alerts.Medium }}</span> Medium Risk</li>
-                                        <li><span class="alert-count-low">{{ scan.alerts.Low }}</span> Low Risk</li>
-                                        <li><span class="alert-count-info">{{ scan.alerts.Informational }}</span> Informational</li>
-                                    </ul>
-                                    <a href="{{ scan.report_path }}" class="btn btn-primary" target="_blank">View Report</a>
-                                {% endif %}
-                                
-                                {% if scan.status == 'error' %}
-                                    <div class="alert alert-danger">
-                                        Error: {{ scan.error }}
-                                    </div>
-                                {% endif %}
+                                    {% endif %}
+                                    
+                                    {% if scan.status is defined and scan.status == 'completed' %}
+                                        <p>Completed: {{ scan.end_time|default('Unknown') }}</p>
+                                        {% if scan.alerts is defined %}
+                                            <h5>Results:</h5>
+                                            <ul>
+                                                <li><span class="alert-count-high">{{ scan.alerts.High|default('0') }}</span> High Risk</li>
+                                                <li><span class="alert-count-medium">{{ scan.alerts.Medium|default('0') }}</span> Medium Risk</li>
+                                                <li><span class="alert-count-low">{{ scan.alerts.Low|default('0') }}</span> Low Risk</li>
+                                                <li><span class="alert-count-info">{{ scan.alerts.Informational|default('0') }}</span> Informational</li>
+                                            </ul>
+                                        {% endif %}
+                                        {% if scan.report_path is defined %}
+                                            <a href="{{ scan.report_path }}" class="btn btn-primary" target="_blank">View Report</a>
+                                        {% endif %}
+                                    {% endif %}
+                                    
+                                    {% if scan.status is defined and scan.status == 'error' and scan.error is defined %}
+                                        <div class="alert alert-danger">
+                                            Error: {{ scan.error }}
+                                        </div>
+                                    {% endif %}
+                                </div>
                             </div>
-                        </div>
+                        {% else %}
+                            <div class="alert alert-info">No scans have been run yet.</div>
+                        {% endfor %}
                     {% else %}
-                        <div class="alert alert-info">No scans have been run yet.</div>
-                    {% endfor %}
+                        <div class="alert alert-info">No scan data available.</div>
+                    {% endif %}
                 </div>
             </div>
         </div>

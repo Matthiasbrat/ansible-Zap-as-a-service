@@ -1,6 +1,12 @@
 ---
 # Main tasks for OWASP ZAP installation and ZaaS (ZAP as a Service) configuration
 
+- name: Create ZAP group
+  group:
+    name: "{{ zaproxy_group | default('zaproxy') }}"
+    state: present
+  become: yes
+
 - name: Create ZAP user and group
   user:
     name: "{{ zaproxy_user | default('zaproxy') }}"
@@ -10,6 +16,20 @@
     home: "{{ zaproxy_home | default('/opt/zaproxy') }}"
     state: present
   become: yes
+
+- name: Check if docker group exists
+  getent:
+    database: group
+    key: docker
+  become: yes
+
+- name: Add zaproxy user to the docker group
+  user:
+    name: "{{ zaproxy_user | default('zaproxy') }}"
+    groups: docker
+    append: yes
+  become: yes
+  when: "getent_group['docker'] is defined"
 
 - name: Install required dependencies
   package:
@@ -25,14 +45,43 @@
     state: present
   become: yes
 
-- name: Install Docker dependencies
+- name: Install Docker and Python dependencies
   pip:
     name:
       - docker
-      - docker-compose
       - requests
       - flask
     state: present
+  become: yes
+
+# Remove any old docker-compose installation
+- name: Remove old docker-compose Python package
+  pip:
+    name: docker-compose
+    state: absent
+  become: yes
+
+# Install docker-compose directly using curl 
+- name: Download Docker Compose binary
+  get_url:
+    url: https://github.com/docker/compose/releases/download/v2.18.1/docker-compose-linux-x86_64
+    dest: /usr/local/bin/docker-compose
+    mode: '0755'
+  become: yes
+
+# Download the plugin version for newer Docker
+- name: Create docker plugins directory
+  file:
+    path: /usr/local/lib/docker/cli-plugins
+    state: directory
+    mode: '0755'
+  become: yes
+
+- name: Download Docker Compose plugin
+  get_url:
+    url: https://github.com/docker/compose/releases/download/v2.18.1/docker-compose-linux-x86_64
+    dest: /usr/local/lib/docker/cli-plugins/docker-compose
+    mode: '0755'
   become: yes
 
 - name: Create ZAP directories
@@ -45,10 +94,45 @@
   loop:
     - "{{ zaproxy_home | default('/opt/zaproxy') }}"
     - "{{ zaproxy_home | default('/opt/zaproxy') }}/data"
+    - "{{ zaproxy_home | default('/opt/zaproxy') }}/config"
+    - "{{ zaproxy_home | default('/opt/zaproxy') }}/scripts"
     - "/opt/zaas"
     - "/opt/zaas/static"
     - "/opt/zaas/static/reports"
     - "/opt/zaas/templates"
+  become: yes
+
+# Add the missing script directories required for the Docker build
+- name: Create missing Docker build directories
+  file:
+    path: "{{ zaproxy_home | default('/opt/zaproxy') }}/{{ item }}"
+    state: directory
+    owner: "{{ zaproxy_user | default('zaproxy') }}"
+    group: "{{ zaproxy_group | default('zaproxy') }}"
+    mode: 0755
+  loop:
+    - "scripts"
+    - "config"
+  become: yes
+
+# Copy ZAP API daemon script to the scripts directory needed for Docker build
+- name: Copy ZAP API daemon script to Docker build directory 
+  template:
+    src: zap-api-daemon.sh.j2
+    dest: "{{ zaproxy_home | default('/opt/zaproxy') }}/scripts/zap-api-daemon.sh"
+    owner: "{{ zaproxy_user | default('zaproxy') }}"
+    group: "{{ zaproxy_group | default('zaproxy') }}"
+    mode: 0755
+  become: yes
+
+# Copy config properties to the config directory needed for Docker build
+- name: Copy ZAP configuration properties to Docker build directory
+  template:
+    src: config.properties.j2
+    dest: "{{ zaproxy_home | default('/opt/zaproxy') }}/config/config.properties"
+    owner: "{{ zaproxy_user | default('zaproxy') }}"
+    group: "{{ zaproxy_group | default('zaproxy') }}"
+    mode: 0644
   become: yes
 
 - name: Copy ZAP Dockerfile
@@ -133,11 +217,6 @@
   become: yes
   notify: Restart ZaaS service
 
-- name: Start docker-compose ZAP container
-  shell: "cd {{ zaproxy_home | default('/opt/zaproxy') }} && docker-compose up -d"
-  become: yes
-  become_user: "{{ zaproxy_user | default('zaproxy') }}"
-  
 - name: Enable and start ZaaS service
   systemd:
     name: zaproxy
@@ -145,3 +224,68 @@
     state: started
     daemon_reload: yes
   become: yes
+
+- name: Install docker-compose using docker SDK
+  pip:
+    name: docker-compose<2.0.0
+    state: present
+  become: yes
+
+- name: Build ZAP Docker image
+  docker_image:
+    name: zaproxy:latest
+    build:
+      path: "{{ zaproxy_home | default('/opt/zaproxy') }}"
+      pull: yes
+    source: build
+  become: yes
+  become_user: "{{ zaproxy_user | default('zaproxy') }}"
+  ignore_errors: yes
+
+- name: Start ZAP container using docker module
+  docker_container:
+    name: zaproxy
+    image: zaproxy:latest
+    volumes:
+      - "{{ zaproxy_home | default('/opt/zaproxy') }}/data:/zap/data"
+      - "{{ zaproxy_home | default('/opt/zaproxy') }}/config:/zap/config"
+      - "{{ zaproxy_home | default('/opt/zaproxy') }}/scripts:/zap/scripts"
+    ports:
+      - "8080:8080"
+      - "8090:8090"
+      - "5901:5901"
+      - "6901:6901"
+    env:
+      ZAP_PORT: "8080"
+      ZAP_API_KEY: "{{ zap_api_key | default('zaproxy') }}"
+      JAVA_OPTS: "-Xmx3g"
+    restart_policy: unless-stopped
+  become: yes
+  become_user: "{{ zaproxy_user | default('zaproxy') }}"
+  ignore_errors: yes
+
+- name: Fallback - Build and start Docker container manually
+  shell: |
+    cd {{ zaproxy_home | default('/opt/zaproxy') }}
+    docker build -t zaproxy .
+    # Stop existing container if it exists
+    docker stop zaproxy || true
+    docker rm zaproxy || true
+    # Run new container with host network option if external access is enabled
+    docker run -d --name zaproxy \
+      -v {{ zaproxy_home | default('/opt/zaproxy') }}/data:/zap/data \
+      -v {{ zaproxy_home | default('/opt/zaproxy') }}/config:/zap/config \
+      -v {{ zaproxy_home | default('/opt/zaproxy') }}/scripts:/zap/scripts \
+      -p {{ zap_host_bind_address | default('0.0.0.0') }}:{{ zap_api_port | default('8080') }}:8080 \
+      -p {{ zap_host_bind_address | default('0.0.0.0') }}:{{ zap_web_ui_port | default('8090') }}:8090 \
+      -p {{ zap_host_bind_address | default('0.0.0.0') }}:{{ zap_vnc_port | default('5901') }}:5901 \
+      -p {{ zap_host_bind_address | default('0.0.0.0') }}:{{ zap_novnc_port | default('6901') }}:6901 \
+      -e ZAP_PORT={{ zap_api_port | default('8080') }} \
+      -e ZAP_API_KEY={{ zap_api_key | default('zaproxy') }} \
+      -e JAVA_OPTS="-Xmx{{ zap_java_memory | default('3g') }}" \
+      --restart unless-stopped \
+      zaproxy
+  become: yes
+  register: docker_manual_result
+  failed_when: false
+  changed_when: docker_manual_result.rc == 0

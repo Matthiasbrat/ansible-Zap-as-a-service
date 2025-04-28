@@ -7,9 +7,9 @@ services:
       dockerfile: Dockerfile
     container_name: zaproxy
     volumes:
-      - ./data:/zap/data
-      - ./config:/zap/config
-      - ./scripts:/zap/scripts
+      - "{{ zaproxy_home | default('/opt/zaproxy') }}/data:/zap/data"
+      - "{{ zaproxy_home | default('/opt/zaproxy') }}/config:/zap/config"
+      - "{{ zaproxy_home | default('/opt/zaproxy') }}/scripts:/zap/scripts"
     ports:
       - "8080:8080"   # ZAP API
       - "8090:8090"   # ZAP Web UI

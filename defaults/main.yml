@@ -5,16 +5,27 @@
 zap_api_key: "zaproxy"
 
 # ZAP ports
-zap_api_port: 8080
-zap_web_ui_port: 8090
-zap_vnc_port: 5901
-zap_novnc_port: 6901
+zap_api_port: 8080      # ZAP API UI
+zap_web_ui_port: 8090   # ZAP traditional GUI (via VNC/noVNC)
+zap_vnc_port: 5901      # VNC server for GUI access
+zap_novnc_port: 6901    # Web-based VNC client
+zap_zaas_port: 5000     # ZaaS (ZAP as a Service) web interface port
+
+# Host binding settings - set to 0.0.0.0 to allow external access
+zap_host_bind_address: "0.0.0.0"
+
+# External access settings
+zap_allow_external_access: true
+
+# Firewall configuration
+zap_configure_firewall: true
+zap_firewall_allowed_ips: [] # Empty means allow all, add specific IPs for restriction
 
 # ZAP version - used for Docker image
 zap_version: "stable"
 
-# Java memory allocation
-zap_java_memory: "3g"
+# Java memory allocation - reduced for lower memory systems
+zap_java_memory: "512m"
 
 # Scanner settings
 zap_timeout_secs: 600
