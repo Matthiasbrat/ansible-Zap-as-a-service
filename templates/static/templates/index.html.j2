@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ZaaS - ZAP as a Service</title>
+    <!-- Bootstrap CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        .status-badge {
+            width: 15px;
+            height: 15px;
+            display: inline-block;
+            border-radius: 50%;
+            margin-right: 5px;
+        }
+        .status-running { background-color: #28a745; }
+        .status-error { background-color: #dc3545; }
+        .progress-bar-spider { background-color: #17a2b8; }
+        .progress-bar-scan { background-color: #fd7e14; }
+        .scan-card { margin-bottom: 20px; }
+        .alert-count-high { color: #dc3545; font-weight: bold; }
+        .alert-count-medium { color: #fd7e14; font-weight: bold; }
+        .alert-count-low { color: #ffc107; font-weight: bold; }
+        .alert-count-info { color: #17a2b8; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
+        <div class="container">
+            <a class="navbar-brand" href="#">ZaaS - ZAP as a Service</a>
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav">
+                    <li class="nav-item">
+                        <a class="nav-link active" href="#">Dashboard</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="http://localhost:6901/" target="_blank">ZAP GUI</a>
+                    </li>
+                </ul>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container mt-4">
+        <div class="row">
+            <div class="col-md-12">
+                {% with messages = get_flashed_messages(with_categories=true) %}
+                    {% if messages %}
+                        {% for category, message in messages %}
+                            <div class="alert alert-{{ category }}">{{ message }}</div>
+                        {% endfor %}
+                    {% endif %}
+                {% endwith %}
+            </div>
+        </div>
+
+        <div class="row">
+            <div class="col-md-12">
+                <div class="card">
+                    <div class="card-header">
+                        ZAP Status 
+                        {% if zap_status.status == 'running' %}
+                            <span class="status-badge status-running"></span>
+                            <span class="text-success">Running (Version {{ zap_status.version }})</span>
+                        {% else %}
+                            <span class="status-badge status-error"></span>
+                            <span class="text-danger">Not Running ({{ zap_status.message }})</span>
+                        {% endif %}
+                    </div>
+                    <div class="card-body">
+                        <form action="/start_scan" method="post">
+                            <div class="mb-3">
+                                <label for="target_url" class="form-label">Target URL</label>
+                                <input type="url" class="form-control" id="target_url" name="target_url" placeholder="https://example.com" required>
+                            </div>
+                            <div class="mb-3">
+                                <label for="scan_type" class="form-label">Scan Type</label>
+                                <select class="form-select" id="scan_type" name="scan_type">
+                                    <option value="full">Full Scan (Spider + Active)</option>
+                                    <option value="passive">Passive Scan (Spider Only)</option>
+                                    <option value="active">Active Scan Only</option>
+                                </select>
+                            </div>
+                            <button type="submit" class="btn btn-primary" {% if zap_status.status != 'running' %}disabled{% endif %}>
+                                Start Scan
+                            </button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="row mt-4">
+            <div class="col-md-12">
+                <h2>Scan History</h2>
+                <div id="scan-history">
+                    {% for scan_id, scan in scans.items() %}
+                        <div class="card scan-card" id="scan-{{ scan_id }}">
+                            <div class="card-header">
+                                <strong>{{ scan.target }}</strong> 
+                                <span class="badge {% if scan.status == 'completed' %}bg-success{% elif scan.status == 'error' %}bg-danger{% else %}bg-primary{% endif %} float-end">
+                                    {{ scan.status|replace('_', ' ')|title }}
+                                </span>
+                            </div>
+                            <div class="card-body">
+                                <p>Type: <span class="badge bg-secondary">{{ scan.type|title }}</span></p>
+                                <p>Started: {{ scan.start_time }}</p>
+                                
+                                {% if scan.status in ['spider_running', 'scan_running'] %}
+                                    <div class="progress mb-3">
+                                        <div class="progress-bar {% if scan.status == 'spider_running' %}progress-bar-spider{% else %}progress-bar-scan{% endif %}" 
+                                             role="progressbar" style="width: {{ scan.progress }}%;" 
+                                             aria-valuenow="{{ scan.progress }}" aria-valuemin="0" aria-valuemax="100">
+                                            {{ scan.progress }}%
+                                        </div>
+                                    </div>
+                                {% endif %}
+                                
+                                {% if scan.status == 'completed' %}
+                                    <p>Completed: {{ scan.end_time }}</p>
+                                    <h5>Results:</h5>
+                                    <ul>
+                                        <li><span class="alert-count-high">{{ scan.alerts.High }}</span> High Risk</li>
+                                        <li><span class="alert-count-medium">{{ scan.alerts.Medium }}</span> Medium Risk</li>
+                                        <li><span class="alert-count-low">{{ scan.alerts.Low }}</span> Low Risk</li>
+                                        <li><span class="alert-count-info">{{ scan.alerts.Informational }}</span> Informational</li>
+                                    </ul>
+                                    <a href="{{ scan.report_path }}" class="btn btn-primary" target="_blank">View Report</a>
+                                {% endif %}
+                                
+                                {% if scan.status == 'error' %}
+                                    <div class="alert alert-danger">
+                                        Error: {{ scan.error }}
+                                    </div>
+                                {% endif %}
+                            </div>
+                        </div>
+                    {% else %}
+                        <div class="alert alert-info">No scans have been run yet.</div>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bootstrap and other JS -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        // Function to update scan progress for active scans
+        function updateScanStatus() {
+            const scanCards = document.querySelectorAll('.scan-card');
+            scanCards.forEach(card => {
+                const scanId = card.id.replace('scan-', '');
+                const statusBadge = card.querySelector('.card-header .badge');
+                
+                if (statusBadge && (statusBadge.textContent.trim() === 'Spider Running' || 
+                                   statusBadge.textContent.trim() === 'Scan Running')) {
+                    fetch(`/scan_status/${scanId}`)
+                        .then(response => response.json())
+                        .then(data => {
+                            // If status changed, reload the page to show updated content
+                            if (data.status !== statusBadge.textContent.toLowerCase().replace(' ', '_')) {
+                                location.reload();
+                                return;
+                            }
+                            
+                            // Update progress bar
+                            const progressBar = card.querySelector('.progress-bar');
+                            if (progressBar) {
+                                progressBar.style.width = `${data.progress}%`;
+                                progressBar.setAttribute('aria-valuenow', data.progress);
+                                progressBar.textContent = `${data.progress}%`;
+                            }
+                        })
+                        .catch(error => console.error('Error updating scan status:', error));
+                }
+            });
+        }
+        
+        // Update scan status every 5 seconds
+        setInterval(updateScanStatus, 5000);
+    </script>
+</body>
+</html>

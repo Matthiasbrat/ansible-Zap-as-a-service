@@ -1,0 +1,36 @@
+# ZAP Configuration Properties
+
+# API settings
+api.disablekey=false
+api.key={{ zap_api_key | default('zaproxy') }}
+api.addrs.addr.name=.*
+api.addrs.addr.regex=true
+
+# GUI settings
+view.locale=en_US
+
+# Scanner settings
+connection.timeoutInSecs=600
+spider.maxDuration=60
+scanner.attackMode=STANDARD
+scanner.threadPerHost=5
+scanner.hostPerScan=5
+scanner.maxScanQueueSize=1000
+
+# AJAX Spider
+ajaxSpider.browserId=htmlunit
+ajaxSpider.clickDefaultElems=true
+ajaxSpider.clickElemsOnce=true
+ajaxSpider.eventWait=1000
+ajaxSpider.maxCrawlDepth=10
+ajaxSpider.maxCrawlStates=0
+ajaxSpider.maxDuration=60
+ajaxSpider.randomInputs=true
+
+# Proxy settings
+network.connection.ipv6=false
+network.proxy.autoDetect=false
+network.proxy.connectionParam.singleDomainExclusionRegex=
+network.proxy.exclusions=
+network.proxy.skipLocalDomains=false
+network.proxy.useProxyChain=false

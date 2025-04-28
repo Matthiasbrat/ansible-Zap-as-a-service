@@ -1,0 +1,22 @@
+version: '3'
+
+services:
+  zap:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: zaproxy
+    volumes:
+      - ./data:/zap/data
+      - ./config:/zap/config
+      - ./scripts:/zap/scripts
+    ports:
+      - "8080:8080"   # ZAP API
+      - "8090:8090"   # ZAP Web UI
+      - "5901:5901"   # VNC Server
+      - "6901:6901"   # noVNC Web UI
+    environment:
+      - ZAP_PORT=8080
+      - ZAP_API_KEY={{ zap_api_key | default('zaproxy') }}
+      - JAVA_OPTS=-Xmx3g
+    restart: unless-stopped

@@ -1,0 +1,16 @@
+[Unit]
+Description=ZAP as a Service Web Interface
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/python3 /opt/zaas/zapweb.py
+WorkingDirectory=/opt/zaas
+Environment=FLASK_ENV=production
+Environment=ZAP_API_KEY={{ zaproxy_api_key | default('zaproxy') }}
+Environment=FLASK_SECRET_KEY={{ zaproxy_secret_key | default('zaproxy-secret-key') }}
+Restart=always
+User={{ zaproxy_user | default('zaproxy') }}
+Group={{ zaproxy_group | default('zaproxy') }}
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,9 @@
+---
+# Handlers for OWASP ZAP role
+
+- name: Restart ZaaS service
+  systemd:
+    name: zaproxy
+    state: restarted
+    daemon_reload: yes
+  become: yes

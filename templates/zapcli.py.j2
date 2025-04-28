@@ -1,0 +1,139 @@
+#!/usr/bin/env python3
+
+import argparse
+import requests
+import json
+import sys
+import os
+
+ZAP_API_URL = "http://localhost:8080/JSON"
+ZAP_API_KEY = os.environ.get('ZAP_API_KEY', 'zaproxy')  # Default key, should be changed in production
+
+def check_zap_status():
+    """Check if ZAP is running and accessible"""
+    try:
+        response = requests.get(f"{ZAP_API_URL}/core/view/version/?apikey={ZAP_API_KEY}", timeout=5)
+        if response.status_code == 200:
+            data = response.json()
+            print(f"✅ ZAP is running. Version: {data.get('version', 'Unknown')}")
+            return True
+        else:
+            print(f"❌ ZAP returned status code: {response.status_code}")
+            return False
+    except requests.exceptions.RequestException as e:
+        print(f"❌ Failed to connect to ZAP: {e}")
+        return False
+
+def start_scan(target_url, scan_type="full"):
+    """Start a scan against the target URL"""
+    if not check_zap_status():
+        return False
+    
+    print(f"🔍 Starting {scan_type} scan against {target_url}")
+    
+    # First spider the target
+    try:
+        print(f"🕸️ Starting spider on {target_url}")
+        spider_params = {
+            'apikey': ZAP_API_KEY,
+            'url': target_url,
+            'maxChildren': '10',
+            'recurse': 'true',
+            'contextName': '',
+            'subtreeOnly': 'false'
+        }
+        response = requests.get(f"{ZAP_API_URL}/spider/action/scan/", params=spider_params)
+        spider_id = response.json().get('scan')
+        
+        # Poll until spider completes
+        while True:
+            spider_status = requests.get(
+                f"{ZAP_API_URL}/spider/view/status/",
+                params={'apikey': ZAP_API_KEY, 'scanId': spider_id}
+            ).json()
+            status = spider_status.get('status', '0')
+            if status == '100':
+                break
+            print(f"🕸️ Spider progress: {status}%")
+            import time
+            time.sleep(5)
+        
+        # Start active scan
+        if scan_type in ["full", "active"]:
+            print(f"🔍 Starting active scan on {target_url}")
+            scan_params = {
+                'apikey': ZAP_API_KEY,
+                'url': target_url,
+                'recurse': 'true',
+                'inScopeOnly': 'false',
+                'scanPolicyName': '',
+                'method': '',
+                'postData': ''
+            }
+            response = requests.get(f"{ZAP_API_URL}/ascan/action/scan/", params=scan_params)
+            scan_id = response.json().get('scan')
+            
+            # Poll until active scan completes
+            while True:
+                scan_status = requests.get(
+                    f"{ZAP_API_URL}/ascan/view/status/",
+                    params={'apikey': ZAP_API_KEY, 'scanId': scan_id}
+                ).json()
+                status = scan_status.get('status', '0')
+                if status == '100':
+                    break
+                print(f"🔍 Active scan progress: {status}%")
+                time.sleep(5)
+        
+        # Get alerts (vulnerabilities found)
+        alerts = requests.get(
+            f"{ZAP_API_URL}/core/view/alerts",
+            params={'apikey': ZAP_API_KEY, 'baseurl': target_url}
+        ).json()
+        
+        # Print summary of vulnerabilities found
+        alert_counts = {"High": 0, "Medium": 0, "Low": 0, "Informational": 0}
+        for alert in alerts.get('alerts', []):
+            risk = alert.get('risk', 'Informational')
+            alert_counts[risk] += 1
+        
+        print("\n📊 Scan Results Summary:")
+        print(f"🔴 High Risk: {alert_counts['High']}")
+        print(f"🟠 Medium Risk: {alert_counts['Medium']}")
+        print(f"🟡 Low Risk: {alert_counts['Low']}")
+        print(f"🔵 Informational: {alert_counts['Informational']}")
+        
+        # Generate report
+        report_path = f"{target_url.replace('://', '_').replace('/', '_')}_report.html"
+        print(f"\n📄 Generating HTML report: {report_path}")
+        report_params = {
+            'apikey': ZAP_API_KEY,
+            'title': f'ZAP Scan Report for {target_url}',
+            'template': 'traditional-html',
+            'baseurl': target_url,
+            'reportfilename': report_path
+        }
+        response = requests.get(f"{ZAP_API_URL}/reports/action/generate/", params=report_params)
+        
+        return True
+    
+    except requests.exceptions.RequestException as e:
+        print(f"❌ Error during scan: {e}")
+        return False
+
+def main():
+    parser = argparse.ArgumentParser(description='ZaaS - ZAP as a Service CLI')
+    parser.add_argument('--url', '-u', required=True, help='Target URL to scan')
+    parser.add_argument('--type', '-t', choices=['full', 'passive', 'active'], default='full', 
+                        help='Scan type: full (default), passive, or active')
+    parser.add_argument('--status', '-s', action='store_true', help='Check ZAP status only')
+    
+    args = parser.parse_args()
+    
+    if args.status:
+        check_zap_status()
+    else:
+        start_scan(args.url, args.type)
+
+if __name__ == "__main__":
+    main()

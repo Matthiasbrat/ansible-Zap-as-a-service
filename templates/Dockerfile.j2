@@ -1,0 +1,76 @@
+FROM owasp/zap2docker-stable
+
+USER root
+
+# Install X11 packages for GUI access
+RUN apt-get update && apt-get install -y \
+    x11vnc \
+    xvfb \
+    fluxbox \
+    xterm \
+    supervisor \
+    novnc \
+    net-tools \
+    && rm -rf /var/lib/apt/lists/*
+
+# Setup noVNC
+RUN mkdir -p /usr/share/novnc/utils
+WORKDIR /usr/share/novnc/utils
+
+# Create directories
+RUN mkdir -p /zap/wrk /zap/data
+
+# Set environment variables
+ENV DISPLAY=:1 \
+    VNC_PORT=5901 \
+    NOVNC_PORT=6901 \
+    HOME=/home/zap \
+    TERM=xterm \
+    JAVA_OPTS="-Xmx3g"
+
+# Copy config files
+COPY ./scripts/zap-api-daemon.sh /zap/zap-api-daemon.sh
+COPY ./config/config.properties /home/zap/.ZAP/config.properties
+
+# Make the script executable
+RUN chmod +x /zap/zap-api-daemon.sh
+
+# Create supervisord configuration
+RUN echo '[supervisord]\n\
+nodaemon=true\n\
+\n\
+[program:xvfb]\n\
+command=Xvfb :1 -screen 0 1920x1080x24\n\
+autorestart=true\n\
+\n\
+[program:x11vnc]\n\
+command=x11vnc -display :1 -nopw -forever -shared\n\
+autorestart=true\n\
+\n\
+[program:novnc]\n\
+command=websockify --web /usr/share/novnc 6901 localhost:5901\n\
+autorestart=true\n\
+\n\
+[program:fluxbox]\n\
+command=fluxbox\n\
+environment=DISPLAY=:1\n\
+autorestart=true\n\
+\n\
+[program:zap]\n\
+command=/zap/zap-api-daemon.sh\n\
+autorestart=true\n\
+user=zap\n\
+environment=DISPLAY=:1\n\
+' > /etc/supervisor/conf.d/supervisord.conf
+
+# Set working directory
+WORKDIR /zap
+
+# Expose ports
+EXPOSE 2375 8080 8090 5901 6901
+
+# Switch back to zap user
+USER zap
+
+# Run supervisor
+CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]

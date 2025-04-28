@@ -1,0 +1,17 @@
+#!/bin/bash
+
+# ZAP API daemon startup script
+# This script starts ZAP in daemon mode with GUI access
+
+# Set API key
+if [ -z "$ZAP_API_KEY" ]; then
+  ZAP_API_KEY="zaproxy"
+fi
+
+# Set port
+if [ -z "$ZAP_PORT" ]; then
+  ZAP_PORT="8080"
+fi
+
+# Launch ZAP with API enabled
+/zap/zap.sh -daemon -host 0.0.0.0 -port ${ZAP_PORT} -config api.key=${ZAP_API_KEY} -config api.addrs.addr.name=.* -config api.addrs.addr.regex=true -config connection.timeoutInSecs=600 "$@"

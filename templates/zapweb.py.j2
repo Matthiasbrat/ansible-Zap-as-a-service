@@ -1,0 +1,366 @@
+#!/usr/bin/env python3
+"""
+ZAP as a Service (ZaaS) Web Interface
+This script provides a web interface for interacting with ZAP API
+"""
+
+import os
+import json
+import time
+import uuid
+import logging
+import requests
+from datetime import datetime
+from flask import Flask, render_template, request, jsonify, redirect, url_for, flash, send_from_directory
+
+# Setup logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger('zaas-web')
+
+# Configuration
+ZAP_API_URL = "http://localhost:8080/JSON"
+ZAP_API_KEY = os.environ.get('ZAP_API_KEY', '{{ zaproxy_api_key | default("zaproxy") }}')
+ZAP_GUI_URL = "http://localhost:6901"
+REPORTS_DIR = "static/reports"
+MAX_RETRIES = 5
+RETRY_DELAY = 2  # seconds
+
+app = Flask(__name__)
+app.secret_key = os.environ.get('FLASK_SECRET_KEY', '{{ zaproxy_secret_key | default("zaproxy-secret-key") }}')
+
+# Store scan data in memory (would use a database in production)
+scans = {}
+
+
+def check_zap_status():
+    """Check if ZAP API is available and return status information"""
+    status = {
+        "status": "error",
+        "message": "Unable to connect to ZAP API",
+        "version": "unknown"
+    }
+    
+    try:
+        response = requests.get(
+            f"{ZAP_API_URL}/core/view/version",
+            params={"apikey": ZAP_API_KEY},
+            timeout=5
+        )
+        if response.status_code == 200:
+            data = response.json()
+            status = {
+                "status": "running",
+                "version": data.get("version", "unknown"),
+                "message": "ZAP is running"
+            }
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Error connecting to ZAP API: {str(e)}")
+        status["message"] = str(e)
+    
+    return status
+
+
+def start_spider(target_url, scan_id):
+    """Start a ZAP spider scan against the target"""
+    try:
+        response = requests.get(
+            f"{ZAP_API_URL}/spider/action/scan",
+            params={
+                "apikey": ZAP_API_KEY,
+                "url": target_url,
+                "maxChildren": 10,
+                "recurse": True,
+                "contextName": "",
+                "subtreeOnly": False
+            }
+        )
+        
+        if response.status_code == 200:
+            data = response.json()
+            scan_identifier = data.get('scan')
+            if scan_identifier:
+                logger.info(f"Spider started with ID {scan_identifier} for scan {scan_id}")
+                return scan_identifier
+        
+        logger.error(f"Failed to start spider: {response.text}")
+        return None
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Error starting spider: {str(e)}")
+        return None
+
+
+def check_spider_status(spider_id):
+    """Check the status of a spider scan"""
+    try:
+        response = requests.get(
+            f"{ZAP_API_URL}/spider/view/status",
+            params={
+                "apikey": ZAP_API_KEY,
+                "scanId": spider_id
+            }
+        )
+        
+        if response.status_code == 200:
+            data = response.json()
+            return int(data.get('status', 0))
+        
+        logger.error(f"Failed to check spider status: {response.text}")
+        return 0
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Error checking spider status: {str(e)}")
+        return 0
+
+
+def start_active_scan(target_url, scan_id):
+    """Start a ZAP active scan against the target"""
+    try:
+        response = requests.get(
+            f"{ZAP_API_URL}/ascan/action/scan",
+            params={
+                "apikey": ZAP_API_KEY,
+                "url": target_url,
+                "recurse": True,
+                "inScopeOnly": False,
+                "scanPolicyName": "",
+                "method": "",
+                "postData": ""
+            }
+        )
+        
+        if response.status_code == 200:
+            data = response.json()
+            scan_identifier = data.get('scan')
+            if scan_identifier:
+                logger.info(f"Active scan started with ID {scan_identifier} for scan {scan_id}")
+                return scan_identifier
+        
+        logger.error(f"Failed to start active scan: {response.text}")
+        return None
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Error starting active scan: {str(e)}")
+        return None
+
+
+def check_active_scan_status(scan_identifier):
+    """Check the status of an active scan"""
+    try:
+        response = requests.get(
+            f"{ZAP_API_URL}/ascan/view/status",
+            params={
+                "apikey": ZAP_API_KEY,
+                "scanId": scan_identifier
+            }
+        )
+        
+        if response.status_code == 200:
+            data = response.json()
+            return int(data.get('status', 0))
+        
+        logger.error(f"Failed to check active scan status: {response.text}")
+        return 0
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Error checking active scan status: {str(e)}")
+        return 0
+
+
+def get_alerts_summary(target_url):
+    """Get a summary of alerts by risk level for a target"""
+    alerts_summary = {
+        'High': 0,
+        'Medium': 0,
+        'Low': 0,
+        'Informational': 0
+    }
+    
+    try:
+        response = requests.get(
+            f"{ZAP_API_URL}/alert/view/alerts",
+            params={
+                "apikey": ZAP_API_KEY,
+                "baseurl": target_url
+            }
+        )
+        
+        if response.status_code == 200:
+            data = response.json()
+            alerts = data.get('alerts', [])
+            
+            for alert in alerts:
+                risk = alert.get('risk')
+                if risk == '3':
+                    alerts_summary['High'] += 1
+                elif risk == '2':
+                    alerts_summary['Medium'] += 1
+                elif risk == '1':
+                    alerts_summary['Low'] += 1
+                elif risk == '0':
+                    alerts_summary['Informational'] += 1
+        
+        return alerts_summary
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Error getting alerts: {str(e)}")
+        return alerts_summary
+
+
+def generate_report(target_url, scan_id):
+    """Generate an HTML report for the scan"""
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    report_filename = f"zap_report_{scan_id}_{timestamp}.html"
+    report_path = os.path.join(REPORTS_DIR, report_filename)
+    
+    try:
+        response = requests.get(
+            f"{ZAP_API_URL}/core/other/htmlreport",
+            params={
+                "apikey": ZAP_API_KEY
+            }
+        )
+        
+        if response.status_code == 200:
+            os.makedirs(REPORTS_DIR, exist_ok=True)
+            with open(report_path, 'wb') as f:
+                f.write(response.content)
+            
+            logger.info(f"Report generated at {report_path}")
+            return report_filename
+        
+        logger.error(f"Failed to generate report: {response.text}")
+        return None
+    except (requests.exceptions.RequestException, IOError) as e:
+        logger.error(f"Error generating report: {str(e)}")
+        return None
+
+
+@app.route('/')
+def index():
+    """Main dashboard page"""
+    zap_status = check_zap_status()
+    return render_template('index.html', zap_status=zap_status, scans=scans)
+
+
+@app.route('/start_scan', methods=['POST'])
+def start_scan():
+    """Handle the form submission to start a new scan"""
+    target_url = request.form.get('target_url')
+    scan_type = request.form.get('scan_type', 'full')
+    
+    if not target_url:
+        flash('Please provide a target URL', 'danger')
+        return redirect(url_for('index'))
+    
+    # Generate a unique ID for this scan
+    scan_id = str(uuid.uuid4())
+    
+    # Initialize scan in our data store
+    scans[scan_id] = {
+        'id': scan_id,
+        'target': target_url,
+        'type': scan_type,
+        'status': 'starting',
+        'progress': 0,
+        'start_time': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        'end_time': None,
+        'alerts': None,
+        'report_path': None
+    }
+    
+    # For passive scan, we only do spider
+    if scan_type == 'passive':
+        spider_id = start_spider(target_url, scan_id)
+        if spider_id:
+            scans[scan_id]['status'] = 'spider_running'
+            scans[scan_id]['spider_id'] = spider_id
+            flash('Passive scan started successfully', 'success')
+        else:
+            scans[scan_id]['status'] = 'error'
+            scans[scan_id]['error'] = 'Failed to start spider'
+            flash('Failed to start passive scan', 'danger')
+    
+    # For active scan, we do spider first, then active scan
+    elif scan_type in ['active', 'full']:
+        spider_id = start_spider(target_url, scan_id)
+        if spider_id:
+            scans[scan_id]['status'] = 'spider_running'
+            scans[scan_id]['spider_id'] = spider_id
+            flash(f"{scan_type.capitalize()} scan started successfully", 'success')
+        else:
+            scans[scan_id]['status'] = 'error'
+            scans[scan_id]['error'] = 'Failed to start spider'
+            flash(f"Failed to start {scan_type} scan", 'danger')
+    
+    return redirect(url_for('index'))
+
+
+@app.route('/scan_status/<scan_id>')
+def scan_status(scan_id):
+    """Get the current status of a scan"""
+    if scan_id not in scans:
+        return jsonify({'error': 'Scan not found'}), 404
+    
+    scan = scans[scan_id]
+    
+    # Check if spider is running
+    if scan['status'] == 'spider_running' and 'spider_id' in scan:
+        progress = check_spider_status(scan['spider_id'])
+        scan['progress'] = progress
+        
+        # Spider is complete
+        if progress >= 100:
+            scan['status'] = 'spider_completed'
+            
+            # If this is a full or active scan, start the active scan
+            if scan['type'] in ['active', 'full']:
+                active_scan_id = start_active_scan(scan['target'], scan_id)
+                if active_scan_id:
+                    scan['status'] = 'scan_running'
+                    scan['active_scan_id'] = active_scan_id
+                    scan['progress'] = 0
+                else:
+                    scan['status'] = 'error'
+                    scan['error'] = 'Failed to start active scan'
+            else:
+                # For passive scan, we're done
+                scan['status'] = 'completed'
+                scan['end_time'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                scan['alerts'] = get_alerts_summary(scan['target'])
+                # Generate the report
+                report_filename = generate_report(scan['target'], scan_id)
+                if report_filename:
+                    scan['report_path'] = url_for('static', filename=f'reports/{report_filename}')
+    
+    # Check if active scan is running
+    elif scan['status'] == 'scan_running' and 'active_scan_id' in scan:
+        progress = check_active_scan_status(scan['active_scan_id'])
+        scan['progress'] = progress
+        
+        # Active scan is complete
+        if progress >= 100:
+            scan['status'] = 'completed'
+            scan['end_time'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            scan['alerts'] = get_alerts_summary(scan['target'])
+            # Generate the report
+            report_filename = generate_report(scan['target'], scan_id)
+            if report_filename:
+                scan['report_path'] = url_for('static', filename=f'reports/{report_filename}')
+    
+    return jsonify({
+        'status': scan['status'],
+        'progress': scan['progress']
+    })
+
+
+@app.route('/reports/<path:filename>')
+def serve_report(filename):
+    """Serve a scan report file"""
+    return send_from_directory(REPORTS_DIR, filename)
+
+
+if __name__ == '__main__':
+    # Make sure the reports directory exists
+    os.makedirs(REPORTS_DIR, exist_ok=True)
+    
+    # Start the Flask app
+    app.run(host='0.0.0.0', port=5000, debug=False)
